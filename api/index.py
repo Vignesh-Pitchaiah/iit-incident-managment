@@ -57,8 +57,8 @@ async def ingest_incident(request: Request):
             print(f"🟢 Inserting new incident {incident_id}")
             cs.execute("""
                 INSERT INTO pagerduty_incidents
-                (id, title, status, service, urgency, created_at, raw_payload)
-                VALUES (%s, %s, %s, %s, %s, %s, PARSE_JSON(%s))
+                (id, title, status, service, urgency, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s)
             """, (
                 incident_id,
                 incident.get("title"),
@@ -66,7 +66,6 @@ async def ingest_incident(request: Request):
                 incident.get("service", {}).get("summary"),
                 incident.get("urgency"),
                 incident.get("created_at"),
-                raw_payload,
             ))
 
         elif event_type == "incident.resolved":
@@ -77,9 +76,9 @@ async def ingest_incident(request: Request):
             
             cs.execute("""
                 UPDATE pagerduty_incidents
-                SET status=%s, rca_1=%s, rca_2=%s, business_justification=%s, raw_payload=PARSE_JSON(%s)
+                SET status=%s, rca_1=%s, rca_2=%s, business_justification=%s
                 WHERE id=%s
-            """, (status, rca_1, rca_2, business, raw_payload, incident_id))
+            """, (status, rca_1, rca_2, business, incident_id))
             print(f"🔄 Updated incident {incident_id}")
 
         elif event_type == "incident.annotated":
@@ -91,9 +90,9 @@ async def ingest_incident(request: Request):
             
             cs.execute("""
                 UPDATE pagerduty_incidents
-                SET raw_payload=PARSE_JSON(%s), rca_1=%s, rca_2=%s, business_justification=%s
+                SET rca_1=%s, rca_2=%s, business_justification=%s
                 WHERE id=%s
-            """, (raw_payload, rca_1, rca_2, business, incident_id))
+            """, (rca_1, rca_2, business, incident_id))
             print(f"✅ Updated incident {incident_id} with annotation")
 
         else:
@@ -105,14 +104,13 @@ async def ingest_incident(request: Request):
             if existing:
                 cs.execute("""
                     UPDATE pagerduty_incidents
-                    SET status=%s, title=%s, service=%s, urgency=%s, raw_payload=PARSE_JSON(%s)
+                    SET status=%s, title=%s, service=%s, urgency=%s
                     WHERE id=%s
                 """, (
                     status,
                     incident.get("title"),
                     incident.get("service", {}).get("summary"),
                     incident.get("urgency"),
-                    raw_payload,
                     incident_id
                 ))
                 print(f"✅ Updated existing incident {incident_id}")
@@ -120,8 +118,8 @@ async def ingest_incident(request: Request):
                 print(f"⚠️ Incident {incident_id} not found, inserting as new")
                 cs.execute("""
                     INSERT INTO pagerduty_incidents
-                    (id, title, status, service, urgency, created_at, raw_payload)
-                    VALUES (%s, %s, %s, %s, %s, %s, PARSE_JSON(%s))
+                    (id, title, status, service, urgency, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s)
                 """, (
                     incident_id,
                     incident.get("title"),
@@ -129,7 +127,6 @@ async def ingest_incident(request: Request):
                     incident.get("service", {}).get("summary"),
                     incident.get("urgency"),
                     incident.get("created_at"),
-                    raw_payload,
                 ))
                 print(f"✅ Inserted new incident {incident_id}")
         
