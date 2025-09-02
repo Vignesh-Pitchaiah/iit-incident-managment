@@ -58,7 +58,7 @@ async def ingest_incident(request: Request):
             cs.execute("""
                 INSERT INTO pagerduty_incidents
                 (id, title, status, service, urgency, created_at, assignments, raw_payload)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, PARSE_JSON(%s), PARSE_JSON(%s))
             """, (
                 incident_id,
                 incident.get("title"),
@@ -78,7 +78,7 @@ async def ingest_incident(request: Request):
             
             cs.execute("""
                 UPDATE pagerduty_incidents
-                SET status=%s, rca_1=%s, rca_2=%s, business_justification=%s, raw_payload=%s
+                SET status=%s, rca_1=%s, rca_2=%s, business_justification=%s, raw_payload=PARSE_JSON(%s)
                 WHERE id=%s
             """, (status, rca_1, rca_2, business, raw_payload, incident_id))
             print(f"🔄 Updated incident {incident_id}")
@@ -92,7 +92,7 @@ async def ingest_incident(request: Request):
             
             cs.execute("""
                 UPDATE pagerduty_incidents
-                SET raw_payload=%s, rca_1=%s, rca_2=%s, business_justification=%s
+                SET raw_payload=PARSE_JSON(%s), rca_1=%s, rca_2=%s, business_justification=%s
                 WHERE id=%s
             """, (raw_payload, rca_1, rca_2, business, incident_id))
             print(f"✅ Updated incident {incident_id} with annotation")
@@ -106,7 +106,7 @@ async def ingest_incident(request: Request):
             if existing:
                 cs.execute("""
                     UPDATE pagerduty_incidents
-                    SET status=%s, title=%s, service=%s, urgency=%s, assignments=%s, raw_payload=%s
+                    SET status=%s, title=%s, service=%s, urgency=%s, assignments=PARSE_JSON(%s), raw_payload=PARSE_JSON(%s)
                     WHERE id=%s
                 """, (
                     status,
@@ -123,7 +123,7 @@ async def ingest_incident(request: Request):
                 cs.execute("""
                     INSERT INTO pagerduty_incidents
                     (id, title, status, service, urgency, created_at, assignments, raw_payload)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, PARSE_JSON(%s), PARSE_JSON(%s))
                 """, (
                     incident_id,
                     incident.get("title"),
