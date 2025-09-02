@@ -70,7 +70,7 @@ async def ingest_incident(request: Request):
             cs.execute("""
                 INSERT INTO pagerduty_incidents
                 (id, title, status, service, urgency, created_at, assignments, raw_payload)
-                VALUES (?, ?, ?, ?, ?, ?, PARSE_JSON(?), PARSE_JSON(?))
+                VALUES (%s, %s, %s, %s, %s, %s, PARSE_JSON(%s), PARSE_JSON(%s))
             """, (
                 incident_id,
                 incident.get("title"),
@@ -90,15 +90,13 @@ async def ingest_incident(request: Request):
             
             cs.execute("""
                 UPDATE pagerduty_incidents
-                SET status=?,
-                    rca_1=?,
-                    rca_2=?,
-                    business_justification=?,
-                    raw_payload=PARSE_JSON(?)
-                WHERE id=?
-            """, (
-                status, rca_1, rca_2, business, raw_payload, incident_id
-            ))
+                SET status=%s,
+                    rca_1=%s,
+                    rca_2=%s,
+                    business_justification=%s,
+                    raw_payload=PARSE_JSON(%s)
+                WHERE id=%s
+            """, (status, rca_1, rca_2, business, raw_payload, incident_id))
             print(f"🔄 Updated incident {incident_id}")
             
         elif event_type == "incident.annotated":
@@ -109,31 +107,32 @@ async def ingest_incident(request: Request):
             print(f"📝 Extracted from annotation - RCA1: {rca_1}, RCA2: {rca_2}, Business: {business}")
             
             # Check if incident exists first
-            cs.execute("SELECT id FROM pagerduty_incidents WHERE id = ?", (incident_id,))
+            cs.execute("SELECT id FROM pagerduty_incidents WHERE id = %s", (incident_id,))
             existing = cs.fetchone()
             
             if existing:
                 # Update with RCA info from annotation if found
                 update_sql = """
                     UPDATE pagerduty_incidents
-                    SET raw_payload=PARSE_JSON(?)
+                    SET raw_payload=PARSE_JSON(%s)
                 """
                 update_params = [raw_payload]
                 
                 if rca_1:
-                    update_sql += ", rca_1=?"
+                    update_sql += ", rca_1=%s"
                     update_params.append(rca_1)
                 if rca_2:
-                    update_sql += ", rca_2=?"
+                    update_sql += ", rca_2=%s"
                     update_params.append(rca_2)
                 if business:
-                    update_sql += ", business_justification=?"
+                    update_sql += ", business_justification=%s"
                     update_params.append(business)
-                    
-                update_sql += " WHERE id=?"
+                
+                update_sql += " WHERE id=%s"
                 update_params.append(incident_id)
                 
                 cs.execute(update_sql, update_params)
+
                 print(f"✅ Updated incident {incident_id} with annotation")
             else:
                 print(f"⚠️ Incident {incident_id} not found for annotation")
@@ -143,20 +142,20 @@ async def ingest_incident(request: Request):
             print(f"🔄 Updating incident {incident_id} for event {event_type}")
             
             # Check if incident exists first
-            cs.execute("SELECT id FROM pagerduty_incidents WHERE id = ?", (incident_id,))
+            cs.execute("SELECT id FROM pagerduty_incidents WHERE id = %s", (incident_id,))
             existing = cs.fetchone()
             
             if existing:
                 # Update existing incident
                 cs.execute("""
                     UPDATE pagerduty_incidents
-                    SET status=?,
-                        title=?,
-                        service=?,
-                        urgency=?,
-                        assignments=PARSE_JSON(?),
-                        raw_payload=PARSE_JSON(?)
-                    WHERE id=?
+                    SET status=%s,
+                        title=%s,
+                        service=%s,
+                        urgency=%s,
+                        assignments=PARSE_JSON(%s),
+                        raw_payload=PARSE_JSON(%s)
+                    WHERE id=%s
                 """, (
                     status,
                     incident.get("title"),
@@ -173,7 +172,7 @@ async def ingest_incident(request: Request):
                 cs.execute("""
                     INSERT INTO pagerduty_incidents
                     (id, title, status, service, urgency, created_at, assignments, raw_payload)
-                    VALUES (?, ?, ?, ?, ?, ?, PARSE_JSON(?), PARSE_JSON(?))
+                    VALUES (%s, %s, %s, %s, %s, %s, PARSE_JSON(%s), PARSE_JSON(%s))
                 """, (
                     incident_id,
                     incident.get("title"),
