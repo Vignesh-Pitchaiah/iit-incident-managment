@@ -175,7 +175,7 @@ async def ingest_incident(request: Request):
                 logger.info(f"Handling triggered incident: {incident_id}")
                 
                 # First, check if incident already exists (avoid duplicates)
-                cs.execute("SELECT id FROM pagerduty_incidents WHERE id = %s", (incident_id,))
+                cs.execute("SELECT id FROM pagerduty_incidents WHERE id = ?", (incident_id,))
                 existing = cs.fetchone()
                 
                 if existing:
@@ -185,7 +185,7 @@ async def ingest_incident(request: Request):
                     cs.execute("""
                         INSERT INTO pagerduty_incidents 
                         (id, title, status, service, urgency, created_at, assignments, raw_payload) 
-                        VALUES (%s, %s, %s, %s, %s, %s, PARSE_JSON(%s), PARSE_JSON(%s))
+                        VALUES (?, ?, ?, ?, ?, ?, PARSE_JSON(?), PARSE_JSON(?))
                     """, (
                         incident_id,
                         incident.get("title"),
@@ -209,19 +209,19 @@ async def ingest_incident(request: Request):
                 rca_1, rca_2, business = parse_resolution_note(resolution_note)
                 
                 # Check if incident exists first
-                cs.execute("SELECT id FROM pagerduty_incidents WHERE id = %s", (incident_id,))
+                cs.execute("SELECT id FROM pagerduty_incidents WHERE id = ?", (incident_id,))
                 existing = cs.fetchone()
                 
                 if existing:
                     # Update existing incident
                     update_sql = """
                         UPDATE pagerduty_incidents 
-                        SET status = %s,
-                            title = %s,
-                            service = %s,
-                            urgency = %s,
-                            assignments = PARSE_JSON(%s),
-                            raw_payload = PARSE_JSON(%s),
+                        SET status = ?,
+                            title = ?,
+                            service = ?,
+                            urgency = ?,
+                            assignments = PARSE_JSON(?),
+                            raw_payload = PARSE_JSON(?),
                             updated_at = CURRENT_TIMESTAMP()
                     """
                     update_params = [
@@ -235,16 +235,16 @@ async def ingest_incident(request: Request):
                     
                     # Only update RCA fields if we found values
                     if rca_1 is not None:
-                        update_sql += ", rca_1 = %s"
+                        update_sql += ", rca_1 = ?"
                         update_params.append(rca_1)
                     if rca_2 is not None:
-                        update_sql += ", rca_2 = %s"
+                        update_sql += ", rca_2 = ?"
                         update_params.append(rca_2)
                     if business is not None:
-                        update_sql += ", business_justification = %s"
+                        update_sql += ", business_justification = ?"
                         update_params.append(business)
                     
-                    update_sql += " WHERE id = %s"
+                    update_sql += " WHERE id = ?"
                     update_params.append(incident_id)
                     
                     logger.info(f"Executing update SQL: {update_sql}")
@@ -260,7 +260,7 @@ async def ingest_incident(request: Request):
                     cs.execute("""
                         INSERT INTO pagerduty_incidents 
                         (id, title, status, service, urgency, created_at, assignments, rca_1, rca_2, business_justification, raw_payload) 
-                        VALUES (%s, %s, %s, %s, %s, %s, PARSE_JSON(%s), %s, %s, %s, PARSE_JSON(%s))
+                        VALUES (?, ?, ?, ?, ?, ?, PARSE_JSON(?), ?, ?, ?, PARSE_JSON(?))
                     """, (
                         incident_id,
                         incident.get("title"),
