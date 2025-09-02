@@ -94,3 +94,12 @@ async def ingest_incident(request: Request):
     print("🔒 Snowflake connection closed")
 
     return {"status": "ok", "event_type": event_type}
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=True
+    )
