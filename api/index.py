@@ -17,30 +17,39 @@ def parse_resolution_note(note: str):
 @app.post("/pagerduty")
 async def ingest_incident(request: Request):
     payload = await request.json()
+    print("🔔 Incoming PagerDuty payload:", json.dumps(payload, indent=2))
+
     event = payload.get("event", {})
     event_type = event.get("event_type")
     incident = event.get("data", {})
 
+    print(f"📌 Event type: {event_type}")
+    print(f"📌 Incident data: {incident}")
+
     incident_id = incident.get("id")
     if not incident_id:
+        print("❌ Missing incident id")
         return {"error": "Missing incident id", "payload": payload}
 
-    # Common data
     status = incident.get("status")
     raw_payload = json.dumps(payload)
 
+    print(f"➡️ Processing incident {incident_id} with status: {status}")
+
     # Snowflake connection
     conn = snowflake.connector.connect(
-        user=os.environ["SNOWFLAKE_USER"],
-        password=os.environ["SNOWFLAKE_PASSWORD"],
-        account=os.environ["SNOWFLAKE_ACCOUNT"],
-        warehouse=os.environ["SNOWFLAKE_WAREHOUSE"],
-        database=os.environ["SNOWFLAKE_DATABASE"],
-        schema=os.environ["SNOWFLAKE_SCHEMA"]
+        user="SVCDQM",
+        password="LOGINuSER13579",
+        account="NXKZZIV-WN17856",
+        warehouse="COMPUTE_WH",
+        database="DEV_DWDB",
+        schema="DT_OPS"
     )
     cs = conn.cursor()
+    print("✅ Connected to Snowflake")
 
     if event_type == "incident.triggered":
+        print(f"🟢 Inserting new incident {incident_id}")
         cs.execute("""
             INSERT INTO pagerduty_incidents
             (id, title, status, service, urgency, created_at, assignments, raw_payload)
@@ -57,7 +66,11 @@ async def ingest_incident(request: Request):
         ))
 
     elif event_type == "incident.resolved":
-        rca_1, rca_2, business = parse_resolution_note(incident.get("resolve_reason", ""))
+        note_text = incident.get("resolve_reason", "")
+        print(f"🟡 Parsing resolution note: {note_text}")
+        rca_1, rca_2, business = parse_resolution_note(note_text)
+        print(f"📝 Extracted RCA1: {rca_1}, RCA2: {rca_2}, Business: {business}")
+
         cs.execute("""
             UPDATE pagerduty_incidents
             SET status=%s,
@@ -69,9 +82,15 @@ async def ingest_incident(request: Request):
         """, (
             status, rca_1, rca_2, business, raw_payload, incident_id
         ))
+        print(f"🔄 Updated incident {incident_id}")
+
+    else:
+        print(f"⚠️ Event type {event_type} not handled explicitly")
 
     conn.commit()
+    print("💾 Transaction committed")
     cs.close()
     conn.close()
+    print("🔒 Snowflake connection closed")
 
     return {"status": "ok", "event_type": event_type}
