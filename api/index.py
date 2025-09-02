@@ -3,9 +3,7 @@ import snowflake.connector, json, os, re
 
 app = FastAPI()
 
-# --- Utility: RCA Parsing ---
 def parse_resolution_note(note: str):
-    """Extract RCA1, RCA2, and business justification from resolution note text."""
     rca1 = rca2 = business = None
     if note:
         m1 = re.search(r"rca1:\s*(.+?)(?:\n|$)", note, re.IGNORECASE)
@@ -16,7 +14,6 @@ def parse_resolution_note(note: str):
         business = m3.group(1).strip() if m3 else None
     return rca1, rca2, business
 
-# --- Utility: Snowflake connection ---
 def get_snowflake_connection():
     return snowflake.connector.connect(
         user="SVCDQM",
@@ -30,7 +27,7 @@ def get_snowflake_connection():
 @app.post("/pagerduty")
 async def ingest_incident(request: Request):
     payload = await request.json()
-    print("🔔 Incoming PagerDuty payload:", json.dumps(payload, indent=2, ensure_ascii=False))
+    print("📥 Incoming PagerDuty payload:", json.dumps(payload, indent=2, ensure_ascii=False))
     
     event = payload.get("event", {})
     event_type = event.get("event_type")
@@ -61,7 +58,7 @@ async def ingest_incident(request: Request):
             cs.execute("""
                 INSERT INTO pagerduty_incidents
                 (id, title, status, service, urgency, created_at, assignments, raw_payload)
-                VALUES (%s, %s, %s, %s, %s, %s, %s::VARIANT, %s::VARIANT)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             """, (
                 incident_id,
                 incident.get("title"),
@@ -77,15 +74,11 @@ async def ingest_incident(request: Request):
             note_text = incident.get("resolve_reason") or ""
             print(f"🟡 Parsing resolution note: {note_text}")
             rca_1, rca_2, business = parse_resolution_note(note_text)
-            print(f"📝 Extracted RCA1: {rca_1}, RCA2: {rca_2}, Business: {business}")
+            print(f"🔍 Extracted RCA1: {rca_1}, RCA2: {rca_2}, Business: {business}")
             
             cs.execute("""
                 UPDATE pagerduty_incidents
-                SET status=%s,
-                    rca_1=%s,
-                    rca_2=%s,
-                    business_justification=%s,
-                    raw_payload=%s::VARIANT
+                SET status=%s, rca_1=%s, rca_2=%s, business_justification=%s, raw_payload=%s
                 WHERE id=%s
             """, (status, rca_1, rca_2, business, raw_payload, incident_id))
             print(f"🔄 Updated incident {incident_id}")
@@ -95,14 +88,11 @@ async def ingest_incident(request: Request):
             print(f"📝 Annotation content: {annotation_content}")
             
             rca_1, rca_2, business = parse_resolution_note(annotation_content)
-            print(f"📝 Extracted from annotation - RCA1: {rca_1}, RCA2: {rca_2}, Business: {business}")
+            print(f"🔍 Extracted from annotation - RCA1: {rca_1}, RCA2: {rca_2}, Business: {business}")
             
             cs.execute("""
                 UPDATE pagerduty_incidents
-                SET raw_payload=%s::VARIANT,
-                    rca_1=%s,
-                    rca_2=%s,
-                    business_justification=%s
+                SET raw_payload=%s, rca_1=%s, rca_2=%s, business_justification=%s
                 WHERE id=%s
             """, (raw_payload, rca_1, rca_2, business, incident_id))
             print(f"✅ Updated incident {incident_id} with annotation")
@@ -116,12 +106,7 @@ async def ingest_incident(request: Request):
             if existing:
                 cs.execute("""
                     UPDATE pagerduty_incidents
-                    SET status=%s,
-                        title=%s,
-                        service=%s,
-                        urgency=%s,
-                        assignments=%s::VARIANT,
-                        raw_payload=%s::VARIANT
+                    SET status=%s, title=%s, service=%s, urgency=%s, assignments=%s, raw_payload=%s
                     WHERE id=%s
                 """, (
                     status,
@@ -138,7 +123,7 @@ async def ingest_incident(request: Request):
                 cs.execute("""
                     INSERT INTO pagerduty_incidents
                     (id, title, status, service, urgency, created_at, assignments, raw_payload)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s::VARIANT, %s::VARIANT)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 """, (
                     incident_id,
                     incident.get("title"),
@@ -172,5 +157,3 @@ async def health_check():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
-
-
