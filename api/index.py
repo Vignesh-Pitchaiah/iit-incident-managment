@@ -17,73 +17,61 @@ def parse_resolution_note(note: str):
 @app.post("/pagerduty")
 async def ingest_incident(request: Request):
     payload = await request.json()
-    messages = payload.get("messages", [])
+    event = payload.get("event", {})
+    event_type = event.get("event_type")
+    incident = event.get("data", {})
 
+    incident_id = incident.get("id")
+    if not incident_id:
+        return {"error": "Missing incident id", "payload": payload}
+
+    # Common data
+    status = incident.get("status")
+    raw_payload = json.dumps(payload)
+
+    # Snowflake connection
     conn = snowflake.connector.connect(
-        user="SVCDQM",
-        password="LOGINuSER13579",
-        account="NXKZZIV-WN17856",
-        warehouse="COMPUTE_WH",
-        database="DEV_DWDB",
-        schema="DT_OPS"
+        user=os.environ["SNOWFLAKE_USER"],
+        password=os.environ["SNOWFLAKE_PASSWORD"],
+        account=os.environ["SNOWFLAKE_ACCOUNT"],
+        warehouse=os.environ["SNOWFLAKE_WAREHOUSE"],
+        database=os.environ["SNOWFLAKE_DATABASE"],
+        schema=os.environ["SNOWFLAKE_SCHEMA"]
     )
     cs = conn.cursor()
 
-    for msg in messages:
-        event_type = msg.get("event")
-        incident = msg.get("incident", {})
-        incident_id = incident.get("id")
-        if not incident_id:
-            continue
+    if event_type == "incident.triggered":
+        cs.execute("""
+            INSERT INTO pagerduty_incidents
+            (id, title, status, service, urgency, created_at, assignments, raw_payload)
+            SELECT %s, %s, %s, %s, %s, %s, PARSE_JSON(%s), PARSE_JSON(%s)
+        """, (
+            incident_id,
+            incident.get("title"),
+            status,
+            incident.get("service", {}).get("summary"),
+            incident.get("urgency"),
+            incident.get("created_at"),
+            json.dumps(incident.get("assignees", [])),
+            raw_payload
+        ))
 
-        status = incident.get("status")
-        raw_payload = json.dumps(msg)
-
-        if event_type == "incident.trigger":
-            cs.execute("""
-                INSERT INTO pagerduty_incidents
-                (id, title, status, service, urgency, created_at, assignments, raw_payload)
-                VALUES (%s, %s, %s, %s, %s, %s, PARSE_JSON(%s), PARSE_JSON(%s))
-                ON CONFLICT (id) DO UPDATE SET
-                    title=EXCLUDED.title,
-                    status=EXCLUDED.status,
-                    service=EXCLUDED.service,
-                    urgency=EXCLUDED.urgency,
-                    assignments=EXCLUDED.assignments,
-                    raw_payload=EXCLUDED.raw_payload
-            """, (
-                incident_id,
-                incident.get("title"),
-                status,
-                incident.get("service", {}).get("summary"),
-                incident.get("urgency"),
-                incident.get("created_at"),
-                json.dumps(incident.get("assignments", [])),
-                raw_payload
-            ))
-
-        elif event_type == "incident.resolve":
-            note_text = (
-                incident.get("resolve_reason")
-                or incident.get("last_status_change_reason")
-                or ""
-            )
-            rca_1, rca_2, business = parse_resolution_note(note_text)
-
-            cs.execute("""
-                UPDATE pagerduty_incidents
-                SET status=%s,
-                    rca_1=%s,
-                    rca_2=%s,
-                    business_justification=%s,
-                    raw_payload=PARSE_JSON(%s)
-                WHERE id=%s
-            """, (
-                status, rca_1, rca_2, business, raw_payload, incident_id
-            ))
+    elif event_type == "incident.resolved":
+        rca_1, rca_2, business = parse_resolution_note(incident.get("resolve_reason", ""))
+        cs.execute("""
+            UPDATE pagerduty_incidents
+            SET status=%s,
+                rca_1=%s,
+                rca_2=%s,
+                business_justification=%s,
+                raw_payload=PARSE_JSON(%s)
+            WHERE id=%s
+        """, (
+            status, rca_1, rca_2, business, raw_payload, incident_id
+        ))
 
     conn.commit()
     cs.close()
     conn.close()
 
-    return {"status": "ok"}
+    return {"status": "ok", "event_type": event_type}
