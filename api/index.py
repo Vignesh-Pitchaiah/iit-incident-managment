@@ -101,42 +101,40 @@ async def ingest_incident(request: Request):
             print(f"🔄 Updated incident {incident_id}")
             
         elif event_type == "incident.annotated":
-            # Handle incident annotations which might contain RCA info
-            note_text = data.get("content", "")
-            print(f"📝 Parsing annotation: {note_text}")
-            rca_1, rca_2, business = parse_resolution_note(note_text)
+            data = event.get("data", {})
+            annotation_content = data.get("content", "")
+        
+            print(f"📝 Annotation content: {annotation_content}")
+        
+            incident = data.get("incident", {})
+            incident_id = incident.get("id")
+        
+            # Extract RCA1, RCA2, business justification
+            rca_1 = None
+            rca_2 = None
+            business = None
+        
+            for line in annotation_content.splitlines():
+                if line.lower().startswith("rca1:"):
+                    rca_1 = line.split(":", 1)[1].strip()
+                elif line.lower().startswith("rca2:"):
+                    rca_2 = line.split(":", 1)[1].strip()
+                elif line.lower().startswith("business_justification:"):
+                    business = line.split(":", 1)[1].strip()
+        
             print(f"📝 Extracted from annotation - RCA1: {rca_1}, RCA2: {rca_2}, Business: {business}")
-            
-            # Check if incident exists first
-            cs.execute("SELECT id FROM pagerduty_incidents WHERE id = %s", (incident_id,))
-            existing = cs.fetchone()
-            
-            if existing:
-                # Update with RCA info from annotation if found
-                update_sql = """
-                    UPDATE pagerduty_incidents
-                    SET raw_payload=PARSE_JSON(%s)
-                """
-                update_params = [raw_payload]
-                
-                if rca_1:
-                    update_sql += ", rca_1=%s"
-                    update_params.append(rca_1)
-                if rca_2:
-                    update_sql += ", rca_2=%s"
-                    update_params.append(rca_2)
-                if business:
-                    update_sql += ", business_justification=%s"
-                    update_params.append(business)
-                
-                update_sql += " WHERE id=%s"
-                update_params.append(incident_id)
-                
-                cs.execute(update_sql, update_params)
-
-                print(f"✅ Updated incident {incident_id} with annotation")
-            else:
-                print(f"⚠️ Incident {incident_id} not found for annotation")
+        
+            # ✅ Do the update here
+            cs.execute("""
+                UPDATE pagerduty_incidents
+                SET raw_payload=PARSE_JSON(%s),
+                    rca_1=%s,
+                    rca_2=%s,
+                    business_justification=%s
+                WHERE id=%s
+            """, (raw_payload, rca_1, rca_2, business, incident_id))
+        
+            print(f"✅ Updated incident {incident_id} with annotation")
             
         else:
             # Handle other incident events (acknowledged, escalated, etc.)
@@ -212,4 +210,5 @@ if __name__ == "__main__":
         port=8000,
         reload=True
     )
+
 
