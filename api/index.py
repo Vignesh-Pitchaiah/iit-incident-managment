@@ -57,8 +57,8 @@ async def ingest_incident(request: Request):
             print(f"🟢 Inserting new incident {incident_id}")
             cs.execute("""
                 INSERT INTO pagerduty_incidents
-                (id, title, status, service, urgency, created_at, assignments, raw_payload)
-                VALUES (%s, %s, %s, %s, %s, %s, PARSE_JSON(%s), PARSE_JSON(%s))
+                (id, title, status, service, urgency, created_at, raw_payload)
+                VALUES (%s, %s, %s, %s, %s, %s, PARSE_JSON(%s))
             """, (
                 incident_id,
                 incident.get("title"),
@@ -66,7 +66,6 @@ async def ingest_incident(request: Request):
                 incident.get("service", {}).get("summary"),
                 incident.get("urgency"),
                 incident.get("created_at"),
-                json.dumps(incident.get("assignees", [])),
                 raw_payload,
             ))
 
@@ -106,14 +105,13 @@ async def ingest_incident(request: Request):
             if existing:
                 cs.execute("""
                     UPDATE pagerduty_incidents
-                    SET status=%s, title=%s, service=%s, urgency=%s, assignments=PARSE_JSON(%s), raw_payload=PARSE_JSON(%s)
+                    SET status=%s, title=%s, service=%s, urgency=%s, raw_payload=PARSE_JSON(%s)
                     WHERE id=%s
                 """, (
                     status,
                     incident.get("title"),
                     incident.get("service", {}).get("summary"),
                     incident.get("urgency"),
-                    json.dumps(incident.get("assignees", [])),
                     raw_payload,
                     incident_id
                 ))
@@ -122,8 +120,8 @@ async def ingest_incident(request: Request):
                 print(f"⚠️ Incident {incident_id} not found, inserting as new")
                 cs.execute("""
                     INSERT INTO pagerduty_incidents
-                    (id, title, status, service, urgency, created_at, assignments, raw_payload)
-                    VALUES (%s, %s, %s, %s, %s, %s, PARSE_JSON(%s), PARSE_JSON(%s))
+                    (id, title, status, service, urgency, created_at, raw_payload)
+                    VALUES (%s, %s, %s, %s, %s, %s, PARSE_JSON(%s))
                 """, (
                     incident_id,
                     incident.get("title"),
@@ -131,7 +129,6 @@ async def ingest_incident(request: Request):
                     incident.get("service", {}).get("summary"),
                     incident.get("urgency"),
                     incident.get("created_at"),
-                    json.dumps(incident.get("assignees", [])),
                     raw_payload,
                 ))
                 print(f"✅ Inserted new incident {incident_id}")
