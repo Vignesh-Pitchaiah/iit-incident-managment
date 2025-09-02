@@ -24,29 +24,17 @@ def parse_resolution_note(note: str):
 @app.post("/pagerduty")
 async def ingest_incident(request: Request):
     payload = await request.json()
-    event_type = payload[
-  "event"
-][
-  "event_type"
-]
-    incident = payload[
-  "event"
-][
-  "data"
-]
+    event_type = payload["event"]["event_type"]
+    incident = payload["event"]["data"]
 
     # Extract base fields
-    incident_id = incident[
-  "id"
-]
+    incident_id = incident["id"]
     title = incident.get("title")
     status = incident.get("status")
-    service = incident.get("service",
-{}).get("summary")
+    service = incident.get("service", {}).get("summary")
     urgency = incident.get("urgency")
     created_at = incident.get("created_at")
-    assignments = json.dumps(incident.get("assignments",
-[]))
+    assignments = json.dumps(incident.get("assignments", []))
     raw_payload = json.dumps(payload)
 
     # Connect to Snowflake
@@ -93,14 +81,9 @@ async def ingest_incident(request: Request):
     cs.close()
     conn.close()
 
-    return {
-  "status": "ok",
-  "event_type": event_type
-}
+    return {"status": "ok", "event_type": event_type}
 
 
 @app.get("/pagerduty")
 async def test_endpoint():
-    return {
-  "message": "PagerDuty ingestion endpoint is alive"
-}
+    return {"message": "PagerDuty ingestion endpoint is alive"}
