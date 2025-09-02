@@ -6,12 +6,14 @@ app = FastAPI()
 def parse_resolution_note(note: str):
     rca1 = rca2 = business = None
     if note:
-        m1 = re.search(r"rca1:\s*(.+?)(?:\n|$)", note, re.IGNORECASE)
-        m2 = re.search(r"rca2:\s*(.+?)(?:\n|$)", note, re.IGNORECASE)
-        m3 = re.search(r"business_justification:\s*(.+?)(?:\n|$)", note, re.IGNORECASE)
+        print(f"🔍 Debug - Raw note: '{note}'")
+        m1 = re.search(r"rca1:\s*(.+?)(?:\s*rca2:|$)", note, re.IGNORECASE | re.DOTALL)
+        m2 = re.search(r"rca2:\s*(.+?)(?:\s*business_justification:|$)", note, re.IGNORECASE | re.DOTALL)
+        m3 = re.search(r"business_justification:\s*(.+?)$", note, re.IGNORECASE | re.DOTALL)
         rca1 = m1.group(1).strip() if m1 else None
         rca2 = m2.group(1).strip() if m2 else None
         business = m3.group(1).strip() if m3 else None
+        print(f"🔍 Debug - Parsed RCA1: '{rca1}', RCA2: '{rca2}', Business: '{business}'")
     return rca1, rca2, business
 
 def get_snowflake_connection():
