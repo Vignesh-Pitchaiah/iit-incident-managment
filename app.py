@@ -23,10 +23,14 @@ def parse_resolution_note(note: str):
 @app.post("/pagerduty")
 async def ingest_incident(request: Request):
     payload = await request.json()
-    incident = payload["event"]["data"]
+    event = payload.get("event", {})
+    incident = event.get("data", {})
 
-    # Extract fields
-    id = incident["id"]
+    # Extract fields safely
+    id = incident.get("id")  # Incident ID
+    if not id:
+        return {"error": "No incident id in payload", "payload": payload}
+
     title = incident.get("title")
     status = incident.get("status")
     service = incident.get("service", {}).get("summary")
@@ -34,7 +38,7 @@ async def ingest_incident(request: Request):
     created_at = incident.get("created_at")
     assignments = json.dumps(incident.get("assignees", []))
 
-    # Resolution note (only present in incident.resolved events)
+    # Resolution note (only on resolved events)
     resolution_note = incident.get("resolution")
     rca_1, rca_2, business_justification = parse_resolution_note(resolution_note)
 
@@ -61,9 +65,11 @@ async def ingest_incident(request: Request):
     cs.close()
     conn.close()
 
-    return {"status": "ok"}
+    return {"status": "ok", "incident_id": id}
 
 
 @app.get("/pagerduty")
 async def test_endpoint():
     return {"message": "PagerDuty ingestion endpoint is alive"}
+
+
