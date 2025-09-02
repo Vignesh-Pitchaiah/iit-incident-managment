@@ -21,7 +21,7 @@ async def ingest_incident(request: Request):
     
     event = payload.get("event", {})
     event_type = event.get("event_type")
-    incident = event.get("data", {})
+    data = event.get("data", {})
     
     # Handle ping events
     if event_type == "pagey.ping":
@@ -29,9 +29,20 @@ async def ingest_incident(request: Request):
         return {"status": "ok", "event_type": event_type, "message": "ping received"}
     
     print(f"📌 Event type: {event_type}")
-    print(f"📌 Incident data: {incident}")
+    print(f"📌 Event data: {data}")
     
-    incident_id = incident.get("id")
+    # Extract incident info based on event type
+    if event_type == "incident.annotated":
+        # For annotated events, incident info is nested
+        incident = data.get("incident", {})
+        incident_id = incident.get("id")
+        note_content = data.get("content", "")
+        print(f"📝 Annotation content: {note_content}")
+    else:
+        # For regular incident events
+        incident = data
+        incident_id = incident.get("id")
+    
     if not incident_id:
         print("❌ Missing incident id")
         return {"error": "Missing incident id", "payload": payload}
@@ -89,6 +100,43 @@ async def ingest_incident(request: Request):
                 status, rca_1, rca_2, business, raw_payload, incident_id
             ))
             print(f"🔄 Updated incident {incident_id}")
+            
+        elif event_type == "incident.annotated":
+            # Handle incident annotations which might contain RCA info
+            note_text = data.get("content", "")
+            print(f"📝 Parsing annotation: {note_text}")
+            rca_1, rca_2, business = parse_resolution_note(note_text)
+            print(f"📝 Extracted from annotation - RCA1: {rca_1}, RCA2: {rca_2}, Business: {business}")
+            
+            # Check if incident exists first
+            cs.execute("SELECT id FROM pagerduty_incidents WHERE id = ?", (incident_id,))
+            existing = cs.fetchone()
+            
+            if existing:
+                # Update with RCA info from annotation if found
+                update_sql = """
+                    UPDATE pagerduty_incidents
+                    SET raw_payload=PARSE_JSON(?)
+                """
+                update_params = [raw_payload]
+                
+                if rca_1:
+                    update_sql += ", rca_1=?"
+                    update_params.append(rca_1)
+                if rca_2:
+                    update_sql += ", rca_2=?"
+                    update_params.append(rca_2)
+                if business:
+                    update_sql += ", business_justification=?"
+                    update_params.append(business)
+                    
+                update_sql += " WHERE id=?"
+                update_params.append(incident_id)
+                
+                cs.execute(update_sql, update_params)
+                print(f"✅ Updated incident {incident_id} with annotation")
+            else:
+                print(f"⚠️ Incident {incident_id} not found for annotation")
             
         else:
             # Handle other incident events (acknowledged, escalated, etc.)
