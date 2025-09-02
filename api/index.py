@@ -76,11 +76,19 @@ async def ingest_incident(request: Request):
             rca_1, rca_2, business = parse_resolution_note(note_text)
             print(f"🔍 Extracted RCA1: {rca_1}, RCA2: {rca_2}, Business: {business}")
             
-            cs.execute("""
-                UPDATE pagerduty_incidents
-                SET status=%s, rca_1=%s, rca_2=%s, business_justification=%s
-                WHERE id=%s
-            """, (status, rca_1, rca_2, business, incident_id))
+            # Only update RCA fields if they have values
+            if rca_1 or rca_2 or business:
+                cs.execute("""
+                    UPDATE pagerduty_incidents
+                    SET status=%s, rca_1=%s, rca_2=%s, business_justification=%s
+                    WHERE id=%s
+                """, (status, rca_1, rca_2, business, incident_id))
+            else:
+                cs.execute("""
+                    UPDATE pagerduty_incidents
+                    SET status=%s
+                    WHERE id=%s
+                """, (status, incident_id))
             print(f"🔄 Updated incident {incident_id}")
 
         elif event_type == "incident.annotated":
