@@ -70,7 +70,7 @@ async def ingest_incident(request: Request):
             cs.execute("""
                 INSERT INTO pagerduty_incidents
                 (id, title, status, service, urgency, created_at, assignments, raw_payload)
-                VALUES (%s, %s, %s, %s, %s, %s, PARSE_JSON(%s), PARSE_JSON(%s))
+                SELECT %s, %s, %s, %s, %s, %s, PARSE_JSON(%s), PARSE_JSON(%s)
             """, (
                 incident_id,
                 incident.get("title"),
@@ -81,6 +81,7 @@ async def ingest_incident(request: Request):
                 json.dumps(incident.get("assignees", [])),
                 raw_payload
             ))
+
             
         elif event_type == "incident.resolved":
             note_text = incident.get("resolve_reason", "")
@@ -211,3 +212,4 @@ if __name__ == "__main__":
         port=8000,
         reload=True
     )
+
