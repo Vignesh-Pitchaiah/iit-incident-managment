@@ -24,7 +24,7 @@ async def ingest_incident(request: Request):
     # Insert into Snowflake
     conn = snowflake.connector.connect(
         user="SVCDQM",
-        password="USERlOGIN13579",
+        password="LOGINuSER13579",
         account="NXKZZIV-WN17856",
         warehouse="COMPUTE_WH",
         database="DEV_DWDB",
@@ -47,3 +47,4 @@ async def ingest_incident(request: Request):
 @app.get("/pagerduty")
 async def test_endpoint():
     return {"message": "PagerDuty ingestion endpoint is alive"}
+
