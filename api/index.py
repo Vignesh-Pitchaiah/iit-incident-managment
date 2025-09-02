@@ -155,9 +155,27 @@ async def ingest_incident(request: Request):
             logger.error("Unable to determine webhook format")
             return {"error": "Unknown webhook format", "payload": payload}
         
+        # Handle ping events
+        if event_type == "pagey.ping":
+            logger.info("Received PagerDuty ping event - webhook is working!")
+            return {
+                "status": "ok", 
+                "event_type": event_type, 
+                "message": "Ping received successfully"
+            }
+        
+        # Handle service events (not incident-related)
+        if event_type.startswith("service."):
+            logger.info(f"Received service event: {event_type} - ignoring")
+            return {
+                "status": "ok", 
+                "event_type": event_type, 
+                "message": "Service event ignored"
+            }
+        
         incident_id = incident.get("id")
         if not incident_id:
-            logger.error(f"Missing incident id in payload")
+            logger.error(f"Missing incident id in payload for event type: {event_type}")
             return {"error": "Missing incident id", "payload": payload}
         
         logger.info(f"Processing event_type: {event_type} for incident: {incident_id}")
