@@ -19,12 +19,12 @@ def parse_resolution_note(note: str):
 # --- Utility: Snowflake connection ---
 def get_snowflake_connection():
     return snowflake.connector.connect(
-        user=os.getenv("SNOWFLAKE_USER"),
-        password=os.getenv("SNOWFLAKE_PASSWORD"),
-        account=os.getenv("SNOWFLAKE_ACCOUNT"),
-        warehouse=os.getenv("SNOWFLAKE_WAREHOUSE", "COMPUTE_WH"),
-        database=os.getenv("SNOWFLAKE_DATABASE", "DEV_DWDB"),
-        schema=os.getenv("SNOWFLAKE_SCHEMA", "DT_OPS"),
+        user="SVCDQM",
+        password="LOGINuSER13579",
+        account="NXKZZIV-WN17856",
+        warehouse="COMPUTE_WH",
+        database="DEV_DWDB",
+        schema="DT_OPS"
     )
 
 @app.post("/pagerduty")
@@ -172,3 +172,4 @@ async def health_check():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+
