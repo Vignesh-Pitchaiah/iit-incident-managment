@@ -44,10 +44,22 @@ def upsert_incident(incident, event_type, annotation_content=None):
     priority_obj = incident.get("priority", {})
     priority = priority_obj.get("summary") if isinstance(priority_obj, dict) else priority_obj
     
+    # Extract assignee - get first assignee's summary
+    assignees = incident.get("assignees", [])
+    assignee = assignees[0].get("summary") if assignees and isinstance(assignees[0], dict) else None
+    
+    # Extract incident type
+    incident_type_obj = incident.get("incident_type", {})
+    incident_type = incident_type_obj.get("name") if isinstance(incident_type_obj, dict) else incident_type_obj
+    
+    # Extract urgency and html_url directly
+    urgency = incident.get("urgency")
+    html_url = incident.get("html_url")
+    
     # Calculate closed timestamp for resolved incidents
     closed_timestamp = now if incident.get("status") == "resolved" else None
     
-    print(f"📊 Extracted values - Number: {incident_number}, Priority: {priority}")
+    print(f"📊 Extracted values - Number: {incident_number}, Priority: {priority}, Assignee: {assignee}, Type: {incident_type}, Urgency: {urgency}")
     
     print(f"🔌 Connecting to Snowflake...")
     conn = get_conn()
@@ -70,8 +82,11 @@ def upsert_incident(incident, event_type, annotation_content=None):
                     INCIDENT_TITLE = %s,
                     INCIDENT_STATUS = %s,
                     INCIDENT_SERVICE_SUMMARY = %s,
-                    INCIDENT_LAST_STATUS_CHANGE_AT = %s,
                     PRIORITY = COALESCE(%s, PRIORITY),
+                    ASSIGNEE = COALESCE(%s, ASSIGNEE),
+                    INCIDENT_TYPE = COALESCE(%s, INCIDENT_TYPE),
+                    URGENCY = COALESCE(%s, URGENCY),
+                    HTML_URL = COALESCE(%s, HTML_URL),
                     INCIDENT_CLOSED_TIMESTAMP = COALESCE(%s, INCIDENT_CLOSED_TIMESTAMP),
                     rca_1 = COALESCE(%s, rca_1),
                     rca_2 = COALESCE(%s, rca_2),
@@ -81,8 +96,9 @@ def upsert_incident(incident, event_type, annotation_content=None):
                 WHERE INCIDENT_ID = %s
             """, (
                 incident_number, incident.get("title"), incident.get("status"),
-                incident.get("service", {}).get("summary"), incident.get("last_status_change_at"),
-                priority, closed_timestamp, rca1, rca2, business, now, 'PAGERDUTY_WEBHOOK', incident_id
+                incident.get("service", {}).get("summary"), priority, assignee, 
+                incident_type, urgency, html_url, closed_timestamp, 
+                rca1, rca2, business, now, 'PAGERDUTY_WEBHOOK', incident_id
             ))
             print(f"📝 Update query executed")
         else:
@@ -91,18 +107,18 @@ def upsert_incident(incident, event_type, annotation_content=None):
             print(f"📋 Insert values - Number: {incident_number}, Title: {incident.get('title')}, Priority: {priority}")
             cs.execute("""
                 INSERT INTO pagerduty_incidents (
-                    INCIDENT_ID, INCIDENT_NUMBER, INCIDENT_TITLE, INCIDENT_CREATED_AT,
-                    INCIDENT_STATUS, INCIDENT_SERVICE_SUMMARY, INCIDENT_LAST_STATUS_CHANGE_AT,
-                    PRIORITY, INCIDENT_CLOSED_TIMESTAMP, AS_ON_DATE, ETL_INSERT_REC_DTTM, 
-                    ETL_INSERT_USER_ID, rca_1, rca_2, business_justification
+                    INCIDENT_ID, INCIDENT_NUMBER, INCIDENT_TITLE, INCIDENT_STATUS, 
+                    INCIDENT_SERVICE_SUMMARY, PRIORITY, ASSIGNEE, INCIDENT_TYPE, 
+                    URGENCY, HTML_URL, INCIDENT_CLOSED_TIMESTAMP, AS_ON_DATE, 
+                    ETL_INSERT_REC_DTTM, ETL_INSERT_USER_ID, rca_1, rca_2, business_justification
                 ) VALUES (
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                 )
             """, (
-                incident_id, incident_number, incident.get("title"), incident.get("created_at"),
-                incident.get("status"), incident.get("service", {}).get("summary"),
-                incident.get("last_status_change_at"), priority, closed_timestamp,
-                now.date(), now, 'PAGERDUTY_WEBHOOK', rca1, rca2, business
+                incident_id, incident_number, incident.get("title"), incident.get("status"),
+                incident.get("service", {}).get("summary"), priority, assignee, incident_type,
+                urgency, html_url, closed_timestamp, now.date(), now, 'PAGERDUTY_WEBHOOK', 
+                rca1, rca2, business
             ))
             print(f"📝 Insert query executed")
         
@@ -145,10 +161,8 @@ async def webhook(request: Request):
 async def health():
     return {"status": "healthy"}
 
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
-
-
-
 
