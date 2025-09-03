@@ -161,8 +161,6 @@ async def webhook(request: Request):
 async def health():
     return {"status": "healthy"}
 
-
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
-
+    uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)
