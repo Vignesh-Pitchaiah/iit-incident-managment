@@ -20,60 +20,94 @@ def get_conn():
     )
 
 def upsert_incident(incident, event_type, annotation_content=None):
+    print(f"🔧 Starting upsert for incident: {incident.get('id')}, event: {event_type}")
+    
     rca1, rca2, business = None, None, None
     
     if event_type == "incident.resolved":
-        rca1, rca2, business = parse_rca(incident.get("resolve_reason"))
+        resolve_reason = incident.get("resolve_reason")
+        print(f"🔍 Resolve reason: {resolve_reason}")
+        rca1, rca2, business = parse_rca(resolve_reason)
     elif event_type == "incident.annotated" and annotation_content:
+        print(f"📝 Parsing annotation: {annotation_content}")
         rca1, rca2, business = parse_rca(annotation_content)
     
-    now = datetime.utcnow()
+    print(f"📋 Parsed RCA - RCA1: {rca1}, RCA2: {rca2}, Business: {business}")
     
-    with get_conn() as conn:
-        conn.cursor().execute("""
-            MERGE INTO pagerduty_incidents t USING (
-                SELECT %s as INCIDENT_ID
-            ) s ON t.INCIDENT_ID = s.INCIDENT_ID
-            WHEN MATCHED THEN UPDATE SET
-                INCIDENT_TITLE = %s,
-                INCIDENT_DESCRIPTION = %s,
-                INCIDENT_STATUS = %s,
-                INCIDENT_SERVICE_SUMMARY = %s,
-                INCIDENT_LAST_STATUS_CHANGE_AT = %s,
-                INCIDENT_IS_MERGEABLE = %s,
-                INCIDENT_RESOLVE_REASON_TYPE = %s,
-                INCIDENT_RESOLVE_REASON_ID = %s,
-                rca_1 = COALESCE(%s, rca_1),
-                rca_2 = COALESCE(%s, rca_2),
-                business_justification = COALESCE(%s, business_justification),
-                ETL_UPDATE_REC_DTTM = %s,
-                ETL_UPDATE_USER_ID = 'PAGERDUTY_WEBHOOK'
-            WHEN NOT MATCHED THEN INSERT (
-                INCIDENT_NUMBER, INCIDENT_TITLE, INCIDENT_DESCRIPTION, INCIDENT_CREATED_AT,
-                INCIDENT_STATUS, INCIDENT_SERVICE_SUMMARY, INCIDENT_LAST_STATUS_CHANGE_AT,
-                INCIDENT_IS_MERGEABLE, INCIDENT_ID, INCIDENT_RESOLVE_REASON_TYPE,
-                INCIDENT_RESOLVE_REASON_ID, FILENAME, AS_ON_DATE, ETL_BATCH_ID,
-                ETL_INSERT_REC_DTTM, ETL_INSERT_USER_ID, rca_1, rca_2, business_justification
-            ) VALUES (
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
-            )
-        """, [
-            # MERGE condition
-            incident.get("id"),
-            # UPDATE values
-            incident.get("title"), incident.get("description"), incident.get("status"),
-            incident.get("service", {}).get("summary"), incident.get("last_status_change_at"),
-            incident.get("is_mergeable"), incident.get("resolve_reason", {}).get("type"),
-            incident.get("resolve_reason", {}).get("id"), rca1, rca2, business, now,
-            # INSERT values
-            incident.get("incident_number"), incident.get("title"), incident.get("description"),
-            incident.get("created_at"), incident.get("status"), incident.get("service", {}).get("summary"),
-            incident.get("last_status_change_at"), incident.get("is_mergeable"), incident.get("id"),
-            incident.get("resolve_reason", {}).get("type"), incident.get("resolve_reason", {}).get("id"),
-            f"pagerduty_{now.strftime('%Y%m%d')}.json", now.date(), f"BATCH_{now.strftime('%Y%m%d_%H%M%S')}",
-            now, 'PAGERDUTY_WEBHOOK', rca1, rca2, business
-        ])
+    now = datetime.utcnow()
+    incident_id = incident.get("id")
+    
+    print(f"🔌 Connecting to Snowflake...")
+    conn = get_conn()
+    cs = conn.cursor()
+    print(f"✅ Connected to Snowflake")
+    
+    try:
+        # Check if exists
+        print(f"🔍 Checking if incident {incident_id} exists...")
+        cs.execute("SELECT INCIDENT_ID FROM pagerduty_incidents WHERE INCIDENT_ID = %s", (incident_id,))
+        exists = cs.fetchone()
+        print(f"📊 Exists check result: {exists}")
+        
+        if exists:
+            # Update
+            print(f"🔄 Updating existing incident {incident_id}")
+            cs.execute("""
+                UPDATE pagerduty_incidents SET
+                    INCIDENT_TITLE = %s,
+                    INCIDENT_STATUS = %s,
+                    INCIDENT_SERVICE_SUMMARY = %s,
+                    INCIDENT_LAST_STATUS_CHANGE_AT = %s,
+                    rca_1 = COALESCE(%s, rca_1),
+                    rca_2 = COALESCE(%s, rca_2),
+                    business_justification = COALESCE(%s, business_justification),
+                    ETL_UPDATE_REC_DTTM = %s,
+                    ETL_UPDATE_USER_ID = %s
+                WHERE INCIDENT_ID = %s
+            """, (
+                incident.get("title"), incident.get("status"),
+                incident.get("service", {}).get("summary"),
+                incident.get("last_status_change_at"),
+                rca1, rca2, business, now, 'PAGERDUTY_WEBHOOK', incident_id
+            ))
+            print(f"📝 Update query executed")
+        else:
+            # Insert
+            print(f"➕ Inserting new incident {incident_id}")
+            print(f"📋 Insert values - Title: {incident.get('title')}, Status: {incident.get('status')}")
+            cs.execute("""
+                INSERT INTO pagerduty_incidents (
+                    INCIDENT_ID, INCIDENT_TITLE, INCIDENT_DESCRIPTION, INCIDENT_CREATED_AT,
+                    INCIDENT_STATUS, INCIDENT_SERVICE_SUMMARY, INCIDENT_LAST_STATUS_CHANGE_AT,
+                    INCIDENT_IS_MERGEABLE, FILENAME, AS_ON_DATE, ETL_BATCH_ID,
+                    ETL_INSERT_REC_DTTM, ETL_INSERT_USER_ID, rca_1, rca_2, business_justification
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                )
+            """, (
+                incident_id, incident.get("title"), incident.get("description"),
+                incident.get("created_at"), incident.get("status"),
+                incident.get("service", {}).get("summary"), incident.get("last_status_change_at"),
+                incident.get("is_mergeable"), f"pagerduty_{now.strftime('%Y%m%d')}.json",
+                now.date(), f"BATCH_{now.strftime('%Y%m%d_%H%M%S')}", now,
+                'PAGERDUTY_WEBHOOK', rca1, rca2, business
+            ))
+            print(f"📝 Insert query executed")
+        
+        print(f"💾 Committing transaction...")
         conn.commit()
+        print(f"✅ {'Updated' if exists else 'Inserted'} incident {incident_id}")
+        
+    except Exception as e:
+        print(f"❌ Database error: {str(e)}")
+        print(f"🔄 Rolling back transaction...")
+        conn.rollback()
+        raise
+    finally:
+        print(f"🔒 Closing Snowflake connection...")
+        cs.close()
+        conn.close()
+        print(f"🔒 Connection closed")
 
 @app.post("/pagerduty")
 async def webhook(request: Request):
@@ -99,7 +133,7 @@ async def webhook(request: Request):
 async def health():
     return {"status": "healthy"}
 
-
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+
