@@ -132,12 +132,14 @@ async def webhook(request: Request):
         return {"status": "ok"}
     
     data = event.get("data", {})
+    print(f"============DATA============\n {data}")
     incident = data.get("incident", {}) if event_type == "incident.annotated" else data
-    
+    print(f"============incident============\n {incident}")
     if not incident.get("id"):
         return {"error": "Missing incident id"}
     
     annotation_content = data.get("content") if event_type == "incident.annotated" else None
+    print(f"============annotation_content============\n {annotation_content}")
     upsert_incident(incident, event_type, annotation_content)
     
     return {"status": "ok", "incident_id": incident.get("id")}
@@ -149,5 +151,6 @@ async def health():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+
 
 
