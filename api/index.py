@@ -1,163 +1,100 @@
 from fastapi import FastAPI, Request
-import snowflake.connector, json, os, re
+import snowflake.connector, json, re
+from datetime import datetime
 
 app = FastAPI()
 
-def parse_resolution_note(note: str):
-    rca1 = rca2 = business = None
-    if note:
-        print(f"🔍 Debug - Raw note: '{note}'")
-        m1 = re.search(r"rca1:\s*(.+?)(?:\s*rca2:|$)", note, re.IGNORECASE | re.DOTALL)
-        m2 = re.search(r"rca2:\s*(.+?)(?:\s*business_justification:|$)", note, re.IGNORECASE | re.DOTALL)
-        m3 = re.search(r"business_justification:\s*(.+?)$", note, re.IGNORECASE | re.DOTALL)
-        rca1 = m1.group(1).strip() if m1 else None
-        rca2 = m2.group(1).strip() if m2 else None
-        business = m3.group(1).strip() if m3 else None
-        print(f"🔍 Debug - Parsed RCA1: '{rca1}', RCA2: '{rca2}', Business: '{business}'")
-    return rca1, rca2, business
+def parse_rca(note):
+    if not note: return None, None, None
+    rca1 = re.search(r"rca1:\s*(.+?)(?:\s*rca2:|$)", note, re.I | re.DOTALL)
+    rca2 = re.search(r"rca2:\s*(.+?)(?:\s*business_justification:|$)", note, re.I | re.DOTALL)
+    business = re.search(r"business_justification:\s*(.+?)$", note, re.I | re.DOTALL)
+    return (rca1.group(1).strip() if rca1 else None,
+            rca2.group(1).strip() if rca2 else None,
+            business.group(1).strip() if business else None)
 
-def get_snowflake_connection():
+def get_conn():
     return snowflake.connector.connect(
-        user="SVCDQM",
-        password="LOGINuSER13579",
-        account="NXKZZIV-WN17856",
-        warehouse="COMPUTE_WH",
-        database="DEV_DWDB",
-        schema="DT_OPS"
+        user="SVCDQM", password="LOGINuSER13579", account="NXKZZIV-WN17856",
+        warehouse="COMPUTE_WH", database="DEV_DWDB", schema="DT_OPS"
     )
 
-@app.post("/pagerduty")
-async def ingest_incident(request: Request):
-    payload = await request.json()
-    print("📥 Incoming PagerDuty payload:", json.dumps(payload, indent=2, ensure_ascii=False))
+def upsert_incident(incident, event_type, annotation_content=None):
+    rca1, rca2, business = None, None, None
     
+    if event_type == "incident.resolved":
+        rca1, rca2, business = parse_rca(incident.get("resolve_reason"))
+    elif event_type == "incident.annotated" and annotation_content:
+        rca1, rca2, business = parse_rca(annotation_content)
+    
+    now = datetime.utcnow()
+    
+    with get_conn() as conn:
+        conn.cursor().execute("""
+            MERGE INTO pagerduty_incidents t USING (
+                SELECT %s as INCIDENT_ID
+            ) s ON t.INCIDENT_ID = s.INCIDENT_ID
+            WHEN MATCHED THEN UPDATE SET
+                INCIDENT_TITLE = %s,
+                INCIDENT_DESCRIPTION = %s,
+                INCIDENT_STATUS = %s,
+                INCIDENT_SERVICE_SUMMARY = %s,
+                INCIDENT_LAST_STATUS_CHANGE_AT = %s,
+                INCIDENT_IS_MERGEABLE = %s,
+                INCIDENT_RESOLVE_REASON_TYPE = %s,
+                INCIDENT_RESOLVE_REASON_ID = %s,
+                rca_1 = COALESCE(%s, rca_1),
+                rca_2 = COALESCE(%s, rca_2),
+                business_justification = COALESCE(%s, business_justification),
+                ETL_UPDATE_REC_DTTM = %s,
+                ETL_UPDATE_USER_ID = 'PAGERDUTY_WEBHOOK'
+            WHEN NOT MATCHED THEN INSERT (
+                INCIDENT_NUMBER, INCIDENT_TITLE, INCIDENT_DESCRIPTION, INCIDENT_CREATED_AT,
+                INCIDENT_STATUS, INCIDENT_SERVICE_SUMMARY, INCIDENT_LAST_STATUS_CHANGE_AT,
+                INCIDENT_IS_MERGEABLE, INCIDENT_ID, INCIDENT_RESOLVE_REASON_TYPE,
+                INCIDENT_RESOLVE_REASON_ID, FILENAME, AS_ON_DATE, ETL_BATCH_ID,
+                ETL_INSERT_REC_DTTM, ETL_INSERT_USER_ID, rca_1, rca_2, business_justification
+            ) VALUES (
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+            )
+        """, [
+            # MERGE condition
+            incident.get("id"),
+            # UPDATE values
+            incident.get("title"), incident.get("description"), incident.get("status"),
+            incident.get("service", {}).get("summary"), incident.get("last_status_change_at"),
+            incident.get("is_mergeable"), incident.get("resolve_reason", {}).get("type"),
+            incident.get("resolve_reason", {}).get("id"), rca1, rca2, business, now,
+            # INSERT values
+            incident.get("incident_number"), incident.get("title"), incident.get("description"),
+            incident.get("created_at"), incident.get("status"), incident.get("service", {}).get("summary"),
+            incident.get("last_status_change_at"), incident.get("is_mergeable"), incident.get("id"),
+            incident.get("resolve_reason", {}).get("type"), incident.get("resolve_reason", {}).get("id"),
+            f"pagerduty_{now.strftime('%Y%m%d')}.json", now.date(), f"BATCH_{now.strftime('%Y%m%d_%H%M%S')}",
+            now, 'PAGERDUTY_WEBHOOK', rca1, rca2, business
+        ])
+        conn.commit()
+
+@app.post("/pagerduty")
+async def webhook(request: Request):
+    payload = await request.json()
     event = payload.get("event", {})
     event_type = event.get("event_type")
-    data = event.get("data", {})
     
     if event_type == "pagey.ping":
-        print("🏓 Ping event received - webhook working!")
-        return {"status": "ok", "event_type": event_type, "message": "ping received"}
+        return {"status": "ok"}
     
+    data = event.get("data", {})
     incident = data.get("incident", {}) if event_type == "incident.annotated" else data
-    incident_id = incident.get("id")
-    if not incident_id:
-        print("❌ Missing incident id")
-        return {"error": "Missing incident id", "payload": payload}
     
-    status = incident.get("status")
-    raw_payload = json.dumps(payload, ensure_ascii=False)
+    if not incident.get("id"):
+        return {"error": "Missing incident id"}
     
-    print(f"➡️ Processing incident {incident_id} with status: {status}")
+    annotation_content = data.get("content") if event_type == "incident.annotated" else None
+    upsert_incident(incident, event_type, annotation_content)
     
-    conn = get_snowflake_connection()
-    cs = conn.cursor()
-    print("✅ Connected to Snowflake")
-    
-    try:
-        if event_type == "incident.triggered":
-            print(f"🟢 Inserting new incident {incident_id}")
-            cs.execute("""
-                INSERT INTO pagerduty_incidents
-                (id, title, status, service, urgency, created_at)
-                VALUES (%s, %s, %s, %s, %s, %s)
-            """, (
-                incident_id,
-                incident.get("title"),
-                status,
-                incident.get("service", {}).get("summary"),
-                incident.get("urgency"),
-                incident.get("created_at"),
-            ))
-
-        elif event_type == "incident.resolved":
-            note_text = incident.get("resolve_reason") or ""
-            print(f"🟡 Parsing resolution note: {note_text}")
-            rca_1, rca_2, business = parse_resolution_note(note_text)
-            print(f"🔍 Extracted RCA1: {rca_1}, RCA2: {rca_2}, Business: {business}")
-            
-            # Only update RCA fields if they have values
-            if rca_1 or rca_2 or business:
-                cs.execute("""
-                    UPDATE pagerduty_incidents
-                    SET status=%s, rca_1=%s, rca_2=%s, business_justification=%s
-                    WHERE id=%s
-                """, (status, rca_1, rca_2, business, incident_id))
-            else:
-                cs.execute("""
-                    UPDATE pagerduty_incidents
-                    SET status=%s
-                    WHERE id=%s
-                """, (status, incident_id))
-            print(f"🔄 Updated incident {incident_id}")
-
-        elif event_type == "incident.annotated":
-            annotation_content = data.get("content", "")
-            print(f"📝 Annotation content: {annotation_content}")
-            
-            rca_1, rca_2, business = parse_resolution_note(annotation_content)
-            print(f"🔍 Extracted from annotation - RCA1: {rca_1}, RCA2: {rca_2}, Business: {business}")
-            
-            cs.execute("""
-                UPDATE pagerduty_incidents
-                SET rca_1=%s, rca_2=%s, business_justification=%s
-                WHERE id=%s
-            """, (rca_1, rca_2, business, incident_id))
-            print(f"✅ Updated incident {incident_id} with annotation")
-
-        else:
-            print(f"🔄 Updating incident {incident_id} for event {event_type}")
-            
-            cs.execute("SELECT id FROM pagerduty_incidents WHERE id = %s", (incident_id,))
-            existing = cs.fetchone()
-            
-            if existing:
-                cs.execute("""
-                    UPDATE pagerduty_incidents
-                    SET status=%s, title=%s, service=%s, urgency=%s
-                    WHERE id=%s
-                """, (
-                    status,
-                    incident.get("title"),
-                    incident.get("service", {}).get("summary"),
-                    incident.get("urgency"),
-                    incident_id
-                ))
-                print(f"✅ Updated existing incident {incident_id}")
-            else:
-                print(f"⚠️ Incident {incident_id} not found, inserting as new")
-                cs.execute("""
-                    INSERT INTO pagerduty_incidents
-                    (id, title, status, service, urgency, created_at)
-                    VALUES (%s, %s, %s, %s, %s, %s)
-                """, (
-                    incident_id,
-                    incident.get("title"),
-                    status,
-                    incident.get("service", {}).get("summary"),
-                    incident.get("urgency"),
-                    incident.get("created_at"),
-                ))
-                print(f"✅ Inserted new incident {incident_id}")
-        
-        conn.commit()
-        print("💾 Transaction committed")
-        
-    except Exception as e:
-        print(f"❌ Database error: {str(e)}")
-        conn.rollback()
-        raise
-    finally:
-        cs.close()
-        conn.close()
-        print("🔒 Snowflake connection closed")
-    
-    return {"status": "ok", "event_type": event_type, "incident_id": incident_id}
+    return {"status": "ok", "incident_id": incident.get("id")}
 
 @app.get("/health")
-async def health_check():
+async def health():
     return {"status": "healthy"}
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
