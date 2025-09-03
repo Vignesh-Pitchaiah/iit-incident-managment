@@ -19,6 +19,74 @@ def get_conn():
         warehouse="COMPUTE_WH", database="DEV_DWDB", schema="DT_OPS"
     )
 
+def handle_incident_merge(merged_incident, primary_incident_id):
+    """Handle when an incident is merged into another"""
+    merged_id = merged_incident.get("id")
+    print(f"🔗 Handling merge: {merged_id} -> {primary_incident_id}")
+    
+    now = datetime.utcnow()
+    
+    conn = get_conn()
+    cs = conn.cursor()
+    
+    try:
+        # Mark the merged incident as merged and resolved
+        cs.execute("""
+            UPDATE pagerduty_incidents SET
+                INCIDENT_STATUS = 'resolved',
+                IS_MERGED = TRUE,
+                MERGED_INTO_INCIDENT_ID = %s,
+                INCIDENT_CLOSED_TIMESTAMP = %s,
+                ETL_UPDATE_REC_DTTM = %s,
+                ETL_UPDATE_USER_ID = %s
+            WHERE INCIDENT_ID = %s
+        """, (primary_incident_id, now, now, 'PAGERDUTY_MERGE', merged_id))
+        
+        print(f"✅ Marked incident {merged_id} as merged into {primary_incident_id}")
+        conn.commit()
+        
+    except Exception as e:
+        print(f"❌ Merge error: {e}")
+        conn.rollback()
+        raise
+    finally:
+        cs.close()
+        conn.close()
+
+def propagate_rca_to_merged_incidents(primary_incident_id, rca1, rca2, business):
+    """Copy RCA information from primary incident to all merged incidents"""
+    if not (rca1 or rca2 or business):
+        return  # No RCA to propagate
+        
+    print(f"📋 Propagating RCA to merged incidents of {primary_incident_id}")
+    
+    conn = get_conn()
+    cs = conn.cursor()
+    
+    try:
+        # Update all incidents that were merged into this primary incident
+        cs.execute("""
+            UPDATE pagerduty_incidents SET
+                rca_1 = COALESCE(%s, rca_1),
+                rca_2 = COALESCE(%s, rca_2),
+                business_justification = COALESCE(%s, business_justification),
+                ETL_UPDATE_REC_DTTM = %s,
+                ETL_UPDATE_USER_ID = %s
+            WHERE MERGED_INTO_INCIDENT_ID = %s AND IS_MERGED = TRUE
+        """, (rca1, rca2, business, datetime.utcnow(), 'PAGERDUTY_RCA_PROPAGATION', primary_incident_id))
+        
+        updated_count = cs.rowcount
+        print(f"✅ Propagated RCA to {updated_count} merged incidents")
+        conn.commit()
+        
+    except Exception as e:
+        print(f"❌ RCA propagation error: {e}")
+        conn.rollback()
+        raise
+    finally:
+        cs.close()
+        conn.close()
+
 def upsert_incident(incident, event_type, annotation_content=None):
     print(f"🔧 Starting upsert for incident: {incident.get('id')}, event: {event_type}")
     
@@ -141,6 +209,10 @@ def upsert_incident(incident, event_type, annotation_content=None):
         conn.commit()
         print(f"✅ {'Updated' if exists else 'Inserted'} incident {incident_id}")
         
+        # If this incident has RCA info, propagate to any merged incidents
+        if rca1 or rca2 or business:
+            propagate_rca_to_merged_incidents(incident_id, rca1, rca2, business)
+        
     except Exception as e:
         print(f"❌ Database error: {str(e)}")
         print(f"🔄 Rolling back transaction...")
@@ -151,40 +223,6 @@ def upsert_incident(incident, event_type, annotation_content=None):
         cs.close()
         conn.close()
         print(f"🔒 Connection closed")
-
-def handle_incident_merge(merged_incident, primary_incident_id):
-    """Handle when an incident is merged into another"""
-    merged_id = merged_incident.get("id")
-    print(f"🔗 Handling merge: {merged_id} -> {primary_incident_id}")
-    
-    now = datetime.utcnow()
-    
-    conn = get_conn()
-    cs = conn.cursor()
-    
-    try:
-        # Mark the merged incident as merged and resolved
-        cs.execute("""
-            UPDATE pagerduty_incidents SET
-                INCIDENT_STATUS = 'resolved',
-                IS_MERGED = TRUE,
-                MERGED_INTO_INCIDENT_ID = %s,
-                INCIDENT_CLOSED_TIMESTAMP = %s,
-                ETL_UPDATE_REC_DTTM = %s,
-                ETL_UPDATE_USER_ID = %s
-            WHERE INCIDENT_ID = %s
-        """, (primary_incident_id, now, now, 'PAGERDUTY_MERGE', merged_id))
-        
-        print(f"✅ Marked incident {merged_id} as merged into {primary_incident_id}")
-        conn.commit()
-        
-    except Exception as e:
-        print(f"❌ Merge error: {e}")
-        conn.rollback()
-        raise
-    finally:
-        cs.close()
-        conn.close()
 
 @app.post("/pagerduty")
 async def webhook(request: Request):
