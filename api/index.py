@@ -19,6 +19,44 @@ def get_conn():
         warehouse="COMPUTE_WH", database="DEV_DWDB", schema="DT_OPS"
     )
 
+def handle_incident_merge(merged_incident, primary_incident):
+    """Handle when incidents are merged together"""
+    print(f"🔗 Handling merge: {merged_incident.get('id')} -> {primary_incident.get('id')}")
+    
+    merged_id = merged_incident.get("id")
+    primary_id = primary_incident.get("id")
+    now = datetime.utcnow()
+    
+    conn = get_conn()
+    cs = conn.cursor()
+    
+    try:
+        # Mark the merged incident as merged and resolved
+        cs.execute("""
+            UPDATE pagerduty_incidents SET
+                INCIDENT_STATUS = 'resolved',
+                IS_MERGED = TRUE,
+                MERGED_INTO_INCIDENT_ID = %s,
+                INCIDENT_CLOSED_TIMESTAMP = %s,
+                ETL_UPDATE_REC_DTTM = %s,
+                ETL_UPDATE_USER_ID = %s
+            WHERE INCIDENT_ID = %s
+        """, (primary_id, now, now, 'PAGERDUTY_MERGE', merged_id))
+        
+        # Update the primary incident to ensure it's current
+        upsert_incident(primary_incident, "incident.merged", None)
+        
+        print(f"✅ Merged incident {merged_id} into {primary_id}")
+        conn.commit()
+        
+    except Exception as e:
+        print(f"❌ Merge error: {e}")
+        conn.rollback()
+        raise
+    finally:
+        cs.close()
+        conn.close()
+
 def upsert_incident(incident, event_type, annotation_content=None):
     print(f"🔧 Starting upsert for incident: {incident.get('id')}, event: {event_type}")
     
@@ -74,7 +112,7 @@ def upsert_incident(incident, event_type, annotation_content=None):
         print(f"📊 Exists check result: {exists}")
         
         if exists:
-            # Update
+            # Update - preserve merge info if it exists
             print(f"🔄 Updating existing incident {incident_id}")
             cs.execute("""
                 UPDATE pagerduty_incidents SET
@@ -109,15 +147,15 @@ def upsert_incident(incident, event_type, annotation_content=None):
                 INSERT INTO pagerduty_incidents (
                     INCIDENT_ID, INCIDENT_NUMBER, INCIDENT_TITLE, INCIDENT_STATUS, 
                     INCIDENT_SERVICE_SUMMARY, PRIORITY, ASSIGNEE, INCIDENT_TYPE, 
-                    URGENCY, HTML_URL, INCIDENT_CLOSED_TIMESTAMP, AS_ON_DATE, 
+                    URGENCY, HTML_URL, IS_MERGED, INCIDENT_CLOSED_TIMESTAMP, AS_ON_DATE, 
                     ETL_INSERT_REC_DTTM, ETL_INSERT_USER_ID, rca_1, rca_2, business_justification
                 ) VALUES (
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                 )
             """, (
                 incident_id, incident_number, incident.get("title"), incident.get("status"),
                 incident.get("service", {}).get("summary"), priority, assignee, incident_type,
-                urgency, html_url, closed_timestamp, now.date(), now, 'PAGERDUTY_WEBHOOK', 
+                urgency, html_url, False, closed_timestamp, now.date(), now, 'PAGERDUTY_WEBHOOK', 
                 rca1, rca2, business
             ))
             print(f"📝 Insert query executed")
