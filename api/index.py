@@ -19,44 +19,6 @@ def get_conn():
         warehouse="COMPUTE_WH", database="DEV_DWDB", schema="DT_OPS"
     )
 
-def handle_incident_merge(merged_incident, primary_incident):
-    """Handle when incidents are merged together"""
-    print(f"🔗 Handling merge: {merged_incident.get('id')} -> {primary_incident.get('id')}")
-    
-    merged_id = merged_incident.get("id")
-    primary_id = primary_incident.get("id")
-    now = datetime.utcnow()
-    
-    conn = get_conn()
-    cs = conn.cursor()
-    
-    try:
-        # Mark the merged incident as merged and resolved
-        cs.execute("""
-            UPDATE pagerduty_incidents SET
-                INCIDENT_STATUS = 'resolved',
-                IS_MERGED = TRUE,
-                MERGED_INTO_INCIDENT_ID = %s,
-                INCIDENT_CLOSED_TIMESTAMP = %s,
-                ETL_UPDATE_REC_DTTM = %s,
-                ETL_UPDATE_USER_ID = %s
-            WHERE INCIDENT_ID = %s
-        """, (primary_id, now, now, 'PAGERDUTY_MERGE', merged_id))
-        
-        # Update the primary incident to ensure it's current
-        upsert_incident(primary_incident, "incident.merged", None)
-        
-        print(f"✅ Merged incident {merged_id} into {primary_id}")
-        conn.commit()
-        
-    except Exception as e:
-        print(f"❌ Merge error: {e}")
-        conn.rollback()
-        raise
-    finally:
-        cs.close()
-        conn.close()
-
 def upsert_incident(incident, event_type, annotation_content=None):
     print(f"🔧 Starting upsert for incident: {incident.get('id')}, event: {event_type}")
     
@@ -65,7 +27,22 @@ def upsert_incident(incident, event_type, annotation_content=None):
     if event_type == "incident.resolved":
         resolve_reason = incident.get("resolve_reason")
         print(f"🔍 Resolve reason: {resolve_reason}")
+        
+        # Check if this is a merge resolution
+        if resolve_reason and isinstance(resolve_reason, dict):
+            if resolve_reason.get("type") == "merge_resolve_reason":
+                # This incident was merged into another
+                merged_into_incident = resolve_reason.get("incident", {})
+                merged_into_id = merged_into_incident.get("id")
+                print(f"🔗 Incident {incident.get('id')} was merged into {merged_into_id}")
+                
+                # Handle the merge
+                handle_incident_merge(incident, merged_into_id)
+                return  # Exit early, merge handling is complete
+        
+        # Regular resolution - parse RCA
         rca1, rca2, business = parse_rca(resolve_reason)
+        
     elif event_type == "incident.annotated" and annotation_content:
         print(f"📝 Parsing annotation: {annotation_content}")
         rca1, rca2, business = parse_rca(annotation_content)
@@ -174,6 +151,40 @@ def upsert_incident(incident, event_type, annotation_content=None):
         cs.close()
         conn.close()
         print(f"🔒 Connection closed")
+
+def handle_incident_merge(merged_incident, primary_incident_id):
+    """Handle when an incident is merged into another"""
+    merged_id = merged_incident.get("id")
+    print(f"🔗 Handling merge: {merged_id} -> {primary_incident_id}")
+    
+    now = datetime.utcnow()
+    
+    conn = get_conn()
+    cs = conn.cursor()
+    
+    try:
+        # Mark the merged incident as merged and resolved
+        cs.execute("""
+            UPDATE pagerduty_incidents SET
+                INCIDENT_STATUS = 'resolved',
+                IS_MERGED = TRUE,
+                MERGED_INTO_INCIDENT_ID = %s,
+                INCIDENT_CLOSED_TIMESTAMP = %s,
+                ETL_UPDATE_REC_DTTM = %s,
+                ETL_UPDATE_USER_ID = %s
+            WHERE INCIDENT_ID = %s
+        """, (primary_incident_id, now, now, 'PAGERDUTY_MERGE', merged_id))
+        
+        print(f"✅ Marked incident {merged_id} as merged into {primary_incident_id}")
+        conn.commit()
+        
+    except Exception as e:
+        print(f"❌ Merge error: {e}")
+        conn.rollback()
+        raise
+    finally:
+        cs.close()
+        conn.close()
 
 @app.post("/pagerduty")
 async def webhook(request: Request):
